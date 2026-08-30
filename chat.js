@@ -1,37 +1,103 @@
-module.exports = async (req, res) => {
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+export default async function handler(req, res) {
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      error: "Method not allowed"
+    });
+  }
+
   try {
     const { message } = req.body || {};
-    if (!message || typeof message !== "string") return res.status(400).json({ error: "Message is required" });
-    if (message.length > 3000) return res.status(400).json({ error: "Message is too long" });
 
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) return res.status(500).json({ error: "GEMINI_API_KEY is not configured on the server" });
+    if (!message) {
+      return res.status(400).json({
+        error: "Message is required"
+      });
+    }
 
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
-    const prompt = `You are VitaMind AI, a concise wellness education assistant for a health-tracking app.
-Rules:
-- Provide general educational wellness information only.
-- Do not diagnose, prescribe, or provide medication dosages.
-- Do not claim certainty about a user's health.
-- For emergencies or severe/worrying symptoms, tell the user to contact local emergency services or a qualified healthcare professional.
-- Keep answers practical and age-appropriate.
-User question: ${message}`;
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.5, maxOutputTokens: 700 }
-      })
+    if (!apiKey) {
+      return res.status(500).json({
+        error: "GEMINI_API_KEY is not configured in Vercel"
+      });
+    }
+
+    const model =
+      process.env.GEMINI_MODEL || "gemini-2.0-flash";
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: `You are VitaMind AI, a helpful health education assistant.
+
+Important:
+- Provide general health education only.
+- Do not diagnose diseases.
+- Do not prescribe medicines or medication doses.
+- Encourage professional medical help for serious concerns.
+
+User question:
+${message}`
+                }
+              ]
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error("Gemini error:", data);
+
+      return res.status(response.status).json({
+        error:
+          data?.error?.message ||
+          "Gemini API request failed"
+      });
+    }
+
+    const text =
+      data?.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || "")
+        .join("")
+        .trim();
+
+    if (!text) {
+      return res.status(500).json({
+        error: "No response received from AI"
+      });
+    }
+
+    return res.status(200).json({
+      reply: text
     });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Gemini request failed" });
-    const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("").trim();
-    return res.status(200).json({ text: text || "No response was generated." });
-  } catch (err) {
-    return res.status(500).json({ error: "Server error: " + err.message });
+
+  } catch (error) {
+    console.error("Server error:", error);
+
+    return res.status(500).json({
+      error: error.message || "Internal server error"
+    });
   }
-};
+}
